@@ -107,6 +107,47 @@ func TestHandleKeyboard(t *testing.T) {
 	}
 }
 
+func TestHandleNumpadWithWindowsNumLockOff(t *testing.T) {
+	keyCode := func(vk int32) uint16 {
+		code, ok := input.VKToKeyCode(vk)
+		if !ok {
+			t.Fatalf("VKToKeyCode(0x%X) not mapped", vk)
+		}
+		return code
+	}
+	for _, tc := range []struct {
+		name  string
+		vk    int32
+		flags int32
+		want  uint16
+	}{
+		{"number pad 1", 0x23, 0, keyCode(0x61)},                        // VK_END
+		{"number pad 5", 0x0C, 0, keyCode(0x65)},                        // VK_CLEAR
+		{"number pad dot", 0x2E, protocol.LLKHF_UP, keyCode(0x6E)},      // VK_DELETE
+		{"dedicated End", 0x23, protocol.LLKHF_EXTENDED, keyCode(0x23)}, // E0-prefixed
+		{"injected End", 0x23, protocol.LLKHF_INJECTED, keyCode(0x23)},
+		{"number pad with NumLock on", 0x61, 0, keyCode(0x61)}, // VK_NUMPAD1
+		{"dedicated Left released", 0x25, protocol.LLKHF_EXTENDED | protocol.LLKHF_UP, keyCode(0x25)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := &MockInputDevice{}
+			h := &Handler{Mouse: mock, Keyboard: mock}
+			pkt := &protocol.Packet{Type: protocol.Keyboard}
+			pkt.Keyboard.WVk = tc.vk
+			pkt.Keyboard.DwFlags = tc.flags
+			h.HandlePacket(pkt)
+
+			got := mock.KeyDowns
+			if tc.flags&protocol.LLKHF_UP != 0 {
+				got = mock.KeyUps
+			}
+			if len(got) != 1 || got[0] != tc.want {
+				t.Errorf("keys = %v, want [%d]", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestHideMouseReleasesPressedKeys(t *testing.T) {
 	mock := &MockInputDevice{}
 	h := &Handler{Mouse: mock, Keyboard: mock}

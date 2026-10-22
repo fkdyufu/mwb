@@ -96,11 +96,36 @@ func (h *Handler) handleMouse(pkt *protocol.Packet) {
 	}
 }
 
+// numpadVKs maps the virtual keys Windows reports for number pad keys while
+// its NumLock is off, which unlike the dedicated keys lack LLKHF_EXTENDED, to
+// the number pad keys. NumLock presses only reach this machine, so its NumLock
+// decides what they type, as with a local keyboard.
+var numpadVKs = map[int32]int32{
+	0x2D: 0x60, // VK_INSERT: VK_NUMPAD0
+	0x23: 0x61, // VK_END: VK_NUMPAD1
+	0x28: 0x62, // VK_DOWN: VK_NUMPAD2
+	0x22: 0x63, // VK_NEXT: VK_NUMPAD3
+	0x25: 0x64, // VK_LEFT: VK_NUMPAD4
+	0x0C: 0x65, // VK_CLEAR: VK_NUMPAD5
+	0x27: 0x66, // VK_RIGHT: VK_NUMPAD6
+	0x24: 0x67, // VK_HOME: VK_NUMPAD7
+	0x26: 0x68, // VK_UP: VK_NUMPAD8
+	0x21: 0x69, // VK_PRIOR: VK_NUMPAD9
+	0x2E: 0x6E, // VK_DELETE: VK_DECIMAL
+}
+
 func (h *Handler) handleKeyboard(pkt *protocol.Packet) {
 	kd := pkt.Keyboard
-	keyCode, ok := input.VKToKeyCode(kd.WVk)
+	vk := kd.WVk
+	// Key remappers inject navigation keys without LLKHF_EXTENDED too.
+	if kd.DwFlags&(protocol.LLKHF_EXTENDED|protocol.LLKHF_INJECTED) == 0 {
+		if numpad, ok := numpadVKs[vk]; ok {
+			vk = numpad
+		}
+	}
+	keyCode, ok := input.VKToKeyCode(vk)
 	if !ok {
-		slog.Debug("unknown VK code", "vk", kd.WVk)
+		slog.Debug("unknown VK code", "vk", vk)
 		return
 	}
 	var err error

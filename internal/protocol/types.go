@@ -60,6 +60,7 @@ const (
 // LLKHF keyboard flag bits used as KEYBDDATA.dwFlags on the wire.
 const (
 	LLKHF_EXTENDED = 0x01
+	LLKHF_INJECTED = 0x10
 	LLKHF_UP       = 0x80
 )
 

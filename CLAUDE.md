@@ -41,6 +41,7 @@ Always run `make check` before committing any changes. All code must pass format
 - After handshake, must send HeartbeatEx (type 51) with `Des=255` (ID.ALL) to trigger `AddToMachinePool()` on the server
 - Must respond to Hi (type 2) with Hello (type 3) for device discovery
 - Heartbeat responses must include the local machine name (not the remote's)
+- Keys go out as Windows virtual keys with the low-level hook flags (`LLKHF_*`). The server suppresses keys locally while controlling another machine, so NumLock only toggles there; with the server's NumLock off, number pad keys arrive as VK_END, VK_DOWN, ... without LLKHF_EXTENDED, which mwb maps back to number pad keys so the local NumLock decides
 - The server sends HideMouse (50) to the machine the mouse leaves, which releases its pressed modifiers; mwb releases the keys it pressed, which would otherwise stay down (e.g. Ctrl turning scrolling into zoom)
 
 ## System Requirements
