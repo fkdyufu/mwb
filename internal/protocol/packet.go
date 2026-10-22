@@ -31,6 +31,16 @@ type HandshakeData struct {
 	Machine4 uint32
 }
 
+// ClipboardChunkSize is the number of clipboard payload bytes carried by each
+// ClipboardText or ClipboardImage packet, in bytes 16-63.
+const ClipboardChunkSize = PacketSizeEx - 16
+
+// isClipboardData reports whether packets of type pt carry raw clipboard
+// payload in bytes 16-63 instead of the payload union and machine name.
+func isClipboardData(pt PackageType) bool {
+	return pt == ClipboardText || pt == ClipboardImage || pt == ClipboardDataEnd
+}
+
 // Packet represents a decoded MWB packet.
 // The payload union is represented by separate fields; only one is active
 // depending on Type.
@@ -44,6 +54,13 @@ type Packet struct {
 	Mouse     MouseData
 	Keyboard  KeyboardData
 	Handshake HandshakeData
+	// PostAction tells the receiver of Clipboard, ClipboardAsk and
+	// ClipboardPush packets what to do with the clipboard data (0: put it in
+	// the clipboard).
+	PostAction uint32
+
+	// ClipboardData holds the payload of clipboard data packets.
+	ClipboardData [ClipboardChunkSize]byte
 
 	// Extended area (bytes 32-63, only for big packets)
 	machineName [32]byte
@@ -80,6 +97,11 @@ func (p *Packet) Marshal() []byte {
 	binary.LittleEndian.PutUint32(buf[8:12], p.Src)
 	binary.LittleEndian.PutUint32(buf[12:16], p.Des)
 
+	if isClipboardData(p.Type) {
+		copy(buf[16:], p.ClipboardData[:])
+		return buf
+	}
+
 	// Payload union: bytes 16-31
 	switch p.Type {
 	case Mouse:
@@ -96,6 +118,8 @@ func (p *Packet) Marshal() []byte {
 		binary.LittleEndian.PutUint32(buf[20:24], p.Handshake.Machine2)
 		binary.LittleEndian.PutUint32(buf[24:28], p.Handshake.Machine3)
 		binary.LittleEndian.PutUint32(buf[28:32], p.Handshake.Machine4)
+	case Clipboard, ClipboardAsk, ClipboardPush:
+		binary.LittleEndian.PutUint32(buf[16:20], p.PostAction)
 	}
 
 	// Extended area: bytes 32-63 (machine name for big packets)
@@ -120,6 +144,11 @@ func UnmarshalPacket(buf []byte) (*Packet, error) {
 		Des:  binary.LittleEndian.Uint32(buf[12:16]),
 	}
 
+	if isClipboardData(p.Type) {
+		copy(p.ClipboardData[:], buf[16:])
+		return p, nil
+	}
+
 	switch p.Type {
 	case Mouse:
 		p.Mouse.X = int32(binary.LittleEndian.Uint32(buf[16:20]))
@@ -135,6 +164,8 @@ func UnmarshalPacket(buf []byte) (*Packet, error) {
 		p.Handshake.Machine2 = binary.LittleEndian.Uint32(buf[20:24])
 		p.Handshake.Machine3 = binary.LittleEndian.Uint32(buf[24:28])
 		p.Handshake.Machine4 = binary.LittleEndian.Uint32(buf[28:32])
+	case Clipboard, ClipboardAsk, ClipboardPush:
+		p.PostAction = binary.LittleEndian.Uint32(buf[16:20])
 	}
 
 	// Extended area for big packets

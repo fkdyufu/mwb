@@ -124,3 +124,28 @@ func TestDecryptReaderKeepsPartialBlocks(t *testing.T) {
 		t.Errorf("got %v, want %v", got, plain)
 	}
 }
+
+func TestSchemeStreamRoundTrip(t *testing.T) {
+	for _, s := range []Scheme{SchemeLegacy, SchemeHeader50k, SchemeHeader100k} {
+		var buf bytes.Buffer
+		enc, err := NewSchemeEncryptWriter(&buf, "TestSecurityKey!!", s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		msg := []byte("0123456789abcdef0123456789abcdef")
+		if _, err := enc.Write(msg); err != nil {
+			t.Fatal(err)
+		}
+		dec, err := NewSchemeDecryptReader(&buf, "TestSecurityKey!!", s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := make([]byte, len(msg))
+		if _, err := io.ReadFull(dec, got); err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, msg) {
+			t.Errorf("%v: got %q", s, got)
+		}
+	}
+}

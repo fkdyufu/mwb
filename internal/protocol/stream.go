@@ -70,6 +70,19 @@ func NewDecryptReader(r io.Reader, key, iv []byte) (*DecryptReader, error) {
 	return &DecryptReader{r: r, mode: mode}, nil
 }
 
+// NewSchemeDecryptReader reads the peer's cleartext salt+IV header from r
+// when the scheme uses one, and returns a reader decrypting the rest of r.
+func NewSchemeDecryptReader(r io.Reader, securityKey string, s Scheme) (*DecryptReader, error) {
+	if !s.HasHeader() {
+		return NewDecryptReader(r, DeriveKey(securityKey), FixedIV())
+	}
+	header := make([]byte, HeaderSize)
+	if _, err := io.ReadFull(r, header); err != nil {
+		return nil, fmt.Errorf("read encryption header: %w", err)
+	}
+	return NewDecryptReader(r, DeriveSchemeKey(securityKey, header[:saltSize], s), header[saltSize:])
+}
+
 // Read reads encrypted data, decrypts it, and returns plaintext.
 // It reads whole 16-byte blocks from the underlying reader, keeping any
 // plaintext that does not fit in p for the next call.

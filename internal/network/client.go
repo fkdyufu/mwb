@@ -8,6 +8,9 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strconv"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -24,6 +27,12 @@ type Conn struct {
 	LocalName  string
 	RemoteName string
 	nextID     atomic.Int32
+	// securityKey and scheme are reused for clipboard connections.
+	securityKey string
+	scheme      protocol.Scheme
+	// sendMu serializes writes to the CBC stream, which the receive loop and
+	// the clipboard watcher both send on.
+	sendMu sync.Mutex
 }
 
 // handshakeTimeout bounds each read phase of connection setup. The server
@@ -95,12 +104,14 @@ func Connect(addr, securityKey, machineName string, timeout time.Duration) (*Con
 	}
 
 	c := &Conn{
-		raw:       raw,
-		enc:       enc,
-		dec:       dec,
-		magic:     magic,
-		MachineID: machineID,
-		LocalName: machineName,
+		raw:         raw,
+		enc:         enc,
+		dec:         dec,
+		magic:       magic,
+		MachineID:   machineID,
+		LocalName:   machineName,
+		securityKey: securityKey,
+		scheme:      scheme,
 	}
 
 	if err := c.doHandshake(machineName); err != nil {
@@ -200,11 +211,188 @@ func (c *Conn) doHandshake(machineName string) error {
 // Automatically assigns an incrementing packet ID (starting at 1) to avoid
 // the server's dedup ring buffer which is zero-initialized.
 func (c *Conn) SendPacket(p *protocol.Packet) error {
+	c.sendMu.Lock()
+	defer c.sendMu.Unlock()
 	p.ID = c.nextID.Add(1)
 	buf := p.Marshal()
 	protocol.StampPacket(buf, c.magic)
 	_, err := c.enc.Write(buf)
 	return err
+}
+
+// SendClipboard sends a clipboard payload to all machines as ClipboardText or
+// ClipboardImage packets, followed by ClipboardDataEnd.
+func (c *Conn) SendClipboard(image bool, payload []byte) error {
+	for _, p := range clipboardPackets(c.MachineID, image, payload) {
+		if err := c.SendPacket(p); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// clipboardPackets splits payload into ClipboardChunkSize-byte clipboard data
+// packets from src, zero-padding the last one, and appends ClipboardDataEnd.
+func clipboardPackets(src uint32, image bool, payload []byte) []*protocol.Packet {
+	typ := protocol.ClipboardText
+	if image {
+		typ = protocol.ClipboardImage
+	}
+	var pkts []*protocol.Packet
+	for off := 0; off < len(payload); off += protocol.ClipboardChunkSize {
+		p := &protocol.Packet{Type: typ, Src: src, Des: protocol.IDAll}
+		copy(p.ClipboardData[:], payload[off:])
+		pkts = append(pkts, p)
+	}
+	return append(pkts, &protocol.Packet{Type: protocol.ClipboardDataEnd, Src: src, Des: protocol.IDAll})
+}
+
+// clipboardIdleTimeout bounds how long a clipboard transfer may stall.
+const clipboardIdleTimeout = 30 * time.Second
+
+// clipboardHeaderSize is the size of the header preceding clipboard
+// connection data: UTF-16LE "<size>*<name>", zero-padded.
+const clipboardHeaderSize = 1024
+
+// AnnounceClipboard tells the peer that clipboard data it has to request is
+// available: files and contents too big for the message connection.
+func (c *Conn) AnnounceClipboard() error {
+	p := &protocol.Packet{Type: protocol.Clipboard, Src: c.MachineID, Des: protocol.IDAll}
+	p.SetMachineName(c.LocalName)
+	return c.SendPacket(p)
+}
+
+// FetchClipboard requests the clipboard data the peer announced with a
+// Clipboard packet over a clipboard connection. It returns the name from the
+// transfer header ("text", "image" or the file path; for a size of 0, why
+// nothing is sent) and a reader for size bytes.
+func (c *Conn) FetchClipboard() (name string, size int64, body io.ReadCloser, err error) {
+	raw, dec, _, err := c.dialClipboard(protocol.Clipboard, 0)
+	if err != nil {
+		return "", 0, nil, err
+	}
+	ok := false
+	defer func() {
+		if !ok {
+			_ = raw.Close()
+		}
+	}()
+
+	// The peer closes the connection here if it rejected our handshake.
+	header := make([]byte, clipboardHeaderSize)
+	if _, err := io.ReadFull(dec, header); err != nil {
+		return "", 0, nil, fmt.Errorf("read clipboard header (handshake rejected?): %w", err)
+	}
+	sizeText, name, found := strings.Cut(strings.ReplaceAll(protocol.DecodeUTF16LE(header), "\x00", ""), "*")
+	if size, err = strconv.ParseInt(sizeText, 10, 64); !found || err != nil || size < 0 {
+		return "", 0, nil, fmt.Errorf("invalid clipboard header %q", sizeText)
+	}
+
+	ok = true
+	return name, size, readCloser{io.LimitReader(dec, size), raw}, nil
+}
+
+// PushClipboard sends clipboard data the peer requested with ClipboardAsk
+// over a clipboard connection: name is "text", "image" or a file path, and
+// body holds size bytes. postAction is the one from the request.
+func (c *Conn) PushClipboard(postAction uint32, name string, size int64, body io.Reader) error {
+	header := protocol.EncodeUTF16LE(fmt.Sprintf("%d*%s", size, name))
+	if len(header) > clipboardHeaderSize {
+		return fmt.Errorf("clipboard name too long: %q", name)
+	}
+	header = append(header, make([]byte, clipboardHeaderSize-len(header))...)
+
+	raw, _, enc, err := c.dialClipboard(protocol.ClipboardPush, postAction)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = raw.Close() }()
+
+	if _, err := enc.Write(header); err != nil {
+		return fmt.Errorf("send clipboard header: %w", err)
+	}
+	// The peer reads data until the connection closes, then keeps size bytes.
+	buf := make([]byte, 64*1024)
+	for sent := int64(0); sent < size; {
+		n, err := io.ReadFull(body, buf[:min(int64(len(buf)), size-sent)])
+		if err != nil {
+			return fmt.Errorf("read clipboard data after %d of %d bytes: %w", sent, size, err)
+		}
+		sent += int64(n)
+		if pad := n % 16; pad != 0 {
+			clear(buf[n : n+16-pad])
+			n += 16 - pad
+		}
+		if _, err := enc.Write(buf[:n]); err != nil {
+			return fmt.Errorf("send clipboard data: %w", err)
+		}
+	}
+	return nil
+}
+
+// dialClipboard opens a clipboard connection to the peer's clipboard port,
+// which is one below its message port. Both sides send their scheme preamble,
+// a random block and an identifying packet, typ: Clipboard to request data or
+// ClipboardPush to send it. The packets are not stamped with magic or
+// checksum.
+func (c *Conn) dialClipboard(typ protocol.PackageType, postAction uint32) (raw net.Conn, dec io.Reader, enc io.Writer, err error) {
+	remote, ok := c.raw.RemoteAddr().(*net.TCPAddr)
+	if !ok {
+		return nil, nil, nil, fmt.Errorf("unexpected remote address %v", c.raw.RemoteAddr())
+	}
+	addr := net.JoinHostPort(remote.IP.String(), strconv.Itoa(remote.Port-1))
+	raw, err = net.DialTimeout("tcp", addr, handshakeTimeout)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("dial clipboard port: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = raw.Close()
+		}
+	}()
+
+	w, err := protocol.NewSchemeEncryptWriter(raw, c.securityKey, c.scheme)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	ranData := make([]byte, 16)
+	if _, err := rand.Read(ranData); err != nil {
+		return nil, nil, nil, fmt.Errorf("rand: %w", err)
+	}
+	hello := &protocol.Packet{Type: typ, Src: c.MachineID, PostAction: postAction}
+	hello.SetMachineName(c.LocalName)
+	if _, err := w.Write(append(ranData, hello.Marshal()...)); err != nil {
+		return nil, nil, nil, fmt.Errorf("send clipboard handshake: %w", err)
+	}
+
+	r, err := protocol.NewSchemeDecryptReader(&idleTimeoutReader{conn: raw, timeout: clipboardIdleTimeout}, c.securityKey, c.scheme)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	buf := make([]byte, 16+protocol.PacketSizeEx)
+	if _, err := io.ReadFull(r, buf); err != nil {
+		return nil, nil, nil, fmt.Errorf("read clipboard handshake: %w", err)
+	}
+	if pt := protocol.PackageType(buf[16]); pt != protocol.Clipboard && pt != protocol.ClipboardPush {
+		return nil, nil, nil, fmt.Errorf("unexpected clipboard handshake packet type %d", pt)
+	}
+	return raw, r, w, nil
+}
+
+// idleTimeoutReader fails a read that waits longer than timeout for data.
+type idleTimeoutReader struct {
+	conn    net.Conn
+	timeout time.Duration
+}
+
+func (r *idleTimeoutReader) Read(p []byte) (int, error) {
+	_ = r.conn.SetReadDeadline(time.Now().Add(r.timeout))
+	return r.conn.Read(p)
+}
+
+type readCloser struct {
+	io.Reader
+	io.Closer
 }
 
 // RecvPacket reads, validates, and unmarshals a packet.

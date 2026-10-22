@@ -4,6 +4,7 @@ package network
 import (
 	"log/slog"
 
+	"github.com/bketelsen/mwb/internal/clipboard"
 	"github.com/bketelsen/mwb/internal/input"
 	"github.com/bketelsen/mwb/internal/protocol"
 )
@@ -22,13 +23,42 @@ type KeyboardDevice interface {
 	KeyUp(code uint16) error
 }
 
+// ClipboardSink receives the peer's clipboard contents.
+type ClipboardSink interface {
+	ApplyRemote(image bool, payload []byte)
+	// RemoteHasData records that the peer copied contents it only sends on
+	// request: files and contents over clipboard.MaxPayload.
+	RemoteHasData()
+	// MachineSwitched reports that the peer moved the mouse to this machine.
+	MachineSwitched()
+	// PushRequested reports that the peer asks for the data announced with
+	// a Clipboard packet to be pushed to it, with the request's PostAction.
+	PushRequested(postAction uint32)
+}
+
+// maxClipboardPayload bounds a received clipboard payload: MWB sends at most
+// clipboard.MaxPayload bytes, padded to a whole chunk.
+const maxClipboardPayload = clipboard.MaxPayload + protocol.ClipboardChunkSize
+
 // Handler processes incoming MWB packets and injects input events.
 type Handler struct {
 	Mouse    MouseDevice
 	Keyboard KeyboardDevice
+	// Clipboard receives the peer's clipboard; nil disables clipboard sync.
+	Clipboard ClipboardSink
 
+	clipboardRx clipboardTransfer
 	// pressed holds the keys pressed on this machine and not released yet.
 	pressed map[uint16]struct{}
+}
+
+// clipboardTransfer collects the chunks of a clipboard payload until
+// ClipboardDataEnd arrives. Other packets may arrive in between.
+type clipboardTransfer struct {
+	active   bool
+	image    bool
+	overflow bool
+	data     []byte
 }
 
 // HandlePacket dispatches a packet to the appropriate handler.
@@ -38,6 +68,26 @@ func (h *Handler) HandlePacket(pkt *protocol.Packet) {
 		h.handleMouse(pkt)
 	case protocol.Keyboard:
 		h.handleKeyboard(pkt)
+	case protocol.ClipboardText, protocol.ClipboardImage:
+		h.handleClipboardChunk(pkt)
+	case protocol.ClipboardDataEnd:
+		h.finishClipboard()
+	case protocol.Clipboard:
+		// Sent instead of the data for files and contents over MaxPayload,
+		// which are fetched over the clipboard connection on MachineSwitched.
+		if h.Clipboard != nil {
+			h.Clipboard.RemoteHasData()
+		}
+	case protocol.MachineSwitched:
+		if h.Clipboard != nil {
+			h.Clipboard.MachineSwitched()
+		}
+	case protocol.ClipboardAsk:
+		// Sent instead of fetching announced data when the peer cannot
+		// connect to this machine, which does not listen for connections.
+		if h.Clipboard != nil {
+			h.Clipboard.PushRequested(pkt.PostAction)
+		}
 	case protocol.HideMouse:
 		// Sent when the mouse leaves this machine. Keys released after that
 		// are released on the next machine, so release them here, as MWB does.
@@ -154,4 +204,38 @@ func (h *Handler) releaseKeys() {
 		}
 	}
 	clear(h.pressed)
+}
+
+func (h *Handler) handleClipboardChunk(pkt *protocol.Packet) {
+	if h.Clipboard == nil {
+		return
+	}
+	rx := &h.clipboardRx
+	image := pkt.Type == protocol.ClipboardImage
+	if !rx.active || rx.image != image {
+		*rx = clipboardTransfer{active: true, image: image}
+	}
+	if len(rx.data)+protocol.ClipboardChunkSize > maxClipboardPayload {
+		rx.overflow = true
+		return
+	}
+	rx.data = append(rx.data, pkt.ClipboardData[:]...)
+}
+
+func (h *Handler) finishClipboard() {
+	rx := h.clipboardRx
+	h.resetClipboard()
+	if !rx.active || h.Clipboard == nil {
+		return
+	}
+	if rx.overflow {
+		slog.Info("remote clipboard too large to sync", "max", clipboard.MaxPayload)
+		return
+	}
+	h.Clipboard.ApplyRemote(rx.image, rx.data)
+}
+
+// resetClipboard drops a partially received clipboard payload.
+func (h *Handler) resetClipboard() {
+	h.clipboardRx = clipboardTransfer{}
 }

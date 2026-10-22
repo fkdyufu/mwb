@@ -104,3 +104,45 @@ func TestPacketFieldOffsets(t *testing.T) {
 		t.Errorf("wVk at offset 24 = 0x%X, want 0x41", vk)
 	}
 }
+
+func TestClipboardPacketPayload(t *testing.T) {
+	p := &Packet{Type: ClipboardText, ID: 3, Src: 7, Des: IDAll}
+	for i := range p.ClipboardData {
+		p.ClipboardData[i] = byte(i + 1)
+	}
+	buf := p.Marshal()
+	if len(buf) != PacketSizeEx {
+		t.Fatalf("marshal len = %d, want %d", len(buf), PacketSizeEx)
+	}
+	if buf[16] != 1 || buf[63] != ClipboardChunkSize {
+		t.Errorf("payload not at bytes 16-63: buf[16]=%d buf[63]=%d", buf[16], buf[63])
+	}
+
+	got, err := UnmarshalPacket(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ClipboardData != p.ClipboardData || got.Src != 7 || got.Des != IDAll {
+		t.Errorf("round trip mismatch: %+v", got)
+	}
+}
+
+func TestClipboardPostAction(t *testing.T) {
+	p := &Packet{Type: ClipboardAsk, Src: 7, Des: 9, PostAction: 1}
+	p.SetMachineName("WINHOST")
+	buf := p.Marshal()
+	if len(buf) != PacketSizeEx {
+		t.Fatalf("marshal len = %d, want %d", len(buf), PacketSizeEx)
+	}
+	if v := binary.LittleEndian.Uint32(buf[16:20]); v != 1 {
+		t.Errorf("PostAction at offset 16 = %d, want 1", v)
+	}
+
+	got, err := UnmarshalPacket(buf)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.PostAction != 1 || got.MachineName() != "WINHOST" {
+		t.Errorf("round trip: PostAction=%d name=%q", got.PostAction, got.MachineName())
+	}
+}

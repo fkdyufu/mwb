@@ -2,6 +2,7 @@
 package network
 
 import (
+	"bytes"
 	"testing"
 
 	"github.com/bketelsen/mwb/internal/input"
@@ -211,4 +212,125 @@ func TestHandleMiddleButton(t *testing.T) {
 	if len(mock.ButtonDowns) != 1 || mock.ButtonDowns[0] != input.BTN_MIDDLE {
 		t.Errorf("expected BTN_MIDDLE down, got %v", mock.ButtonDowns)
 	}
+}
+
+// fakeClipboard records clipboard payloads handed to the sink.
+type fakeClipboard struct {
+	applied []struct {
+		image   bool
+		payload []byte
+	}
+	announced int
+	switched  int
+	pushes    []uint32
+}
+
+func (f *fakeClipboard) ApplyRemote(image bool, payload []byte) {
+	f.applied = append(f.applied, struct {
+		image   bool
+		payload []byte
+	}{image, payload})
+}
+
+func (f *fakeClipboard) RemoteHasData()   { f.announced++ }
+func (f *fakeClipboard) MachineSwitched() { f.switched++ }
+func (f *fakeClipboard) PushRequested(postAction uint32) {
+	f.pushes = append(f.pushes, postAction)
+}
+
+// roundTrip marshals and unmarshals p, as it would cross the wire.
+func roundTrip(t *testing.T, p *protocol.Packet) *protocol.Packet {
+	t.Helper()
+	got, err := protocol.UnmarshalPacket(p.Marshal())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+func TestHandleClipboardReassembly(t *testing.T) {
+	mock := &MockInputDevice{}
+	clip := &fakeClipboard{}
+	h := &Handler{Mouse: mock, Keyboard: mock, Clipboard: clip}
+
+	payload := make([]byte, 100)
+	for i := range payload {
+		payload[i] = byte(i + 1)
+	}
+	pkts := clipboardPackets(7, true, payload)
+	if len(pkts) != 4 {
+		t.Fatalf("got %d packets, want 3 chunks + end", len(pkts))
+	}
+
+	for i, p := range pkts {
+		h.HandlePacket(roundTrip(t, p))
+		if i == 0 {
+			// Other packets may arrive in the middle of a transfer
+			move := &protocol.Packet{Type: protocol.Mouse}
+			move.Mouse.X, move.Mouse.Y, move.Mouse.DwFlags = 10, 20, protocol.WM_MOUSEMOVE
+			h.HandlePacket(move)
+		}
+	}
+
+	if len(mock.MouseMoves) != 1 {
+		t.Errorf("mouse moves = %d, want 1", len(mock.MouseMoves))
+	}
+	if len(clip.applied) != 1 {
+		t.Fatalf("applied %d payloads, want 1", len(clip.applied))
+	}
+	got := clip.applied[0]
+	if !got.image {
+		t.Error("image payload applied as text")
+	}
+	// Receivers see whole chunks; the tail of the last one is zero padding.
+	if len(got.payload) != 3*protocol.ClipboardChunkSize || !bytes.Equal(got.payload[:100], payload) {
+		t.Errorf("payload = %v", got.payload)
+	}
+	if !bytes.Equal(got.payload[100:], make([]byte, len(got.payload)-100)) {
+		t.Error("padding is not zero")
+	}
+}
+
+func TestHandleClipboardTooLarge(t *testing.T) {
+	clip := &fakeClipboard{}
+	h := &Handler{Clipboard: clip}
+
+	chunk := &protocol.Packet{Type: protocol.ClipboardText}
+	for i := 0; i <= maxClipboardPayload/protocol.ClipboardChunkSize; i++ {
+		h.HandlePacket(chunk)
+	}
+	h.HandlePacket(&protocol.Packet{Type: protocol.ClipboardDataEnd})
+	if len(clip.applied) != 0 {
+		t.Error("oversized payload was applied")
+	}
+
+	// The next transfer starts fresh
+	h.HandlePacket(chunk)
+	h.HandlePacket(&protocol.Packet{Type: protocol.ClipboardDataEnd})
+	if len(clip.applied) != 1 {
+		t.Errorf("applied %d payloads after oversized one, want 1", len(clip.applied))
+	}
+}
+
+func TestHandleClipboardAnnouncements(t *testing.T) {
+	clip := &fakeClipboard{}
+	h := &Handler{Clipboard: clip}
+	h.HandlePacket(&protocol.Packet{Type: protocol.Clipboard})
+	h.HandlePacket(&protocol.Packet{Type: protocol.MachineSwitched})
+	h.HandlePacket(&protocol.Packet{Type: protocol.ClipboardAsk, PostAction: 1})
+	if clip.announced != 1 || clip.switched != 1 {
+		t.Errorf("announced = %d, switched = %d, want 1 and 1", clip.announced, clip.switched)
+	}
+	if len(clip.pushes) != 1 || clip.pushes[0] != 1 {
+		t.Errorf("push requests = %v, want [1]", clip.pushes)
+	}
+}
+
+func TestHandleClipboardDisabled(t *testing.T) {
+	h := &Handler{}
+	h.HandlePacket(&protocol.Packet{Type: protocol.ClipboardText})
+	h.HandlePacket(&protocol.Packet{Type: protocol.ClipboardDataEnd})
+	h.HandlePacket(&protocol.Packet{Type: protocol.Clipboard})
+	h.HandlePacket(&protocol.Packet{Type: protocol.MachineSwitched})
+	h.HandlePacket(&protocol.Packet{Type: protocol.ClipboardAsk})
 }

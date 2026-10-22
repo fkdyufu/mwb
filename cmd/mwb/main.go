@@ -2,6 +2,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -11,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bketelsen/mwb/internal/clipboard"
 	"github.com/bketelsen/mwb/internal/config"
 	"github.com/bketelsen/mwb/internal/input"
 	"github.com/bketelsen/mwb/internal/network"
@@ -65,6 +67,28 @@ func main() {
 		Keyboard: keyboard,
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var clip *clipboard.Sync
+	if cfg.Clipboard {
+		if backend, err := clipboard.NewBackend(); err != nil {
+			slog.Warn("clipboard sync disabled", "err", err)
+		} else {
+			fileDir := ""
+			if cacheDir, err := os.UserCacheDir(); err == nil {
+				fileDir = filepath.Join(cacheDir, "mwb", "clipboard")
+			}
+			clip = clipboard.NewSync(backend, clipboard.Options{
+				FileDir:         fileDir,
+				MaxTransferSize: int64(cfg.ClipboardMaxFileMB) << 20,
+			})
+			handler.Clipboard = clip
+			go clip.Run(ctx)
+			slog.Info("clipboard sync enabled")
+		}
+	}
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
@@ -87,8 +111,14 @@ func main() {
 			slog.Info("connected", "remote", conn.RemoteName)
 			backoff = 1 * time.Second
 
+			if clip != nil {
+				clip.SetPeer(conn)
+			}
 			if err := network.ReceiveLoop(conn, handler); err != nil {
 				slog.Error("receive loop error", "err", err)
+			}
+			if clip != nil {
+				clip.SetPeer(nil)
 			}
 
 			_ = conn.Close()
