@@ -26,6 +26,9 @@ type KeyboardDevice interface {
 type Handler struct {
 	Mouse    MouseDevice
 	Keyboard KeyboardDevice
+
+	// pressed holds the keys pressed on this machine and not released yet.
+	pressed map[uint16]struct{}
 }
 
 // HandlePacket dispatches a packet to the appropriate handler.
@@ -35,6 +38,10 @@ func (h *Handler) HandlePacket(pkt *protocol.Packet) {
 		h.handleMouse(pkt)
 	case protocol.Keyboard:
 		h.handleKeyboard(pkt)
+	case protocol.HideMouse:
+		// Sent when the mouse leaves this machine. Keys released after that
+		// are released on the next machine, so release them here, as MWB does.
+		h.releaseKeys()
 	case protocol.Hello, protocol.Awake, protocol.HandshakeAck:
 		// expected control packets — ignore silently
 	default:
@@ -100,10 +107,26 @@ func (h *Handler) handleKeyboard(pkt *protocol.Packet) {
 	isUp := (kd.DwFlags & protocol.LLKHF_UP) != 0
 	if isUp {
 		err = h.Keyboard.KeyUp(keyCode)
-	} else {
-		err = h.Keyboard.KeyDown(keyCode)
+		delete(h.pressed, keyCode)
+	} else if err = h.Keyboard.KeyDown(keyCode); err == nil {
+		if h.pressed == nil {
+			h.pressed = make(map[uint16]struct{})
+		}
+		h.pressed[keyCode] = struct{}{}
 	}
 	if err != nil {
 		slog.Error("keyboard input error", "err", err)
 	}
+}
+
+// releaseKeys releases the keys still pressed, which would otherwise stay
+// pressed on this machine, e.g. Ctrl turning the next scroll into a zoom.
+func (h *Handler) releaseKeys() {
+	for code := range h.pressed {
+		slog.Debug("releasing key left pressed", "code", code)
+		if err := h.Keyboard.KeyUp(code); err != nil {
+			slog.Error("keyboard input error", "err", err)
+		}
+	}
+	clear(h.pressed)
 }

@@ -11,6 +11,8 @@ import (
 
 // ReceiveLoop reads packets from the connection and dispatches them.
 func ReceiveLoop(conn *Conn, handler *Handler) error {
+	// Key-up events cannot arrive once the connection is gone.
+	defer handler.releaseKeys()
 	for {
 		pkt, err := conn.RecvPacket()
 		if err != nil {

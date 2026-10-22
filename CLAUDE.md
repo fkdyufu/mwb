@@ -41,6 +41,7 @@ Always run `make check` before committing any changes. All code must pass format
 - After handshake, must send HeartbeatEx (type 51) with `Des=255` (ID.ALL) to trigger `AddToMachinePool()` on the server
 - Must respond to Hi (type 2) with Hello (type 3) for device discovery
 - Heartbeat responses must include the local machine name (not the remote's)
+- The server sends HideMouse (50) to the machine the mouse leaves, which releases its pressed modifiers; mwb releases the keys it pressed, which would otherwise stay down (e.g. Ctrl turning scrolling into zoom)
 
 ## System Requirements
 

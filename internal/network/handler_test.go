@@ -107,6 +107,33 @@ func TestHandleKeyboard(t *testing.T) {
 	}
 }
 
+func TestHideMouseReleasesPressedKeys(t *testing.T) {
+	mock := &MockInputDevice{}
+	h := &Handler{Mouse: mock, Keyboard: mock}
+
+	key := func(vk int32, flags int32) {
+		pkt := &protocol.Packet{Type: protocol.Keyboard}
+		pkt.Keyboard.WVk = vk
+		pkt.Keyboard.DwFlags = flags
+		h.HandlePacket(pkt)
+	}
+	ctrl, _ := input.VKToKeyCode(0xA2) // VK_LCONTROL
+	key(0xA2, 0)
+	key(0x41, 0)
+	key(0x41, protocol.LLKHF_UP)
+
+	// The mouse leaves while Ctrl is still down.
+	h.HandlePacket(&protocol.Packet{Type: protocol.HideMouse})
+	if len(mock.KeyUps) != 2 || mock.KeyUps[1] != ctrl {
+		t.Fatalf("key ups = %v, want A then Ctrl (%d)", mock.KeyUps, ctrl)
+	}
+
+	h.HandlePacket(&protocol.Packet{Type: protocol.HideMouse})
+	if len(mock.KeyUps) != 2 {
+		t.Errorf("released keys again: %v", mock.KeyUps)
+	}
+}
+
 func TestHandleMouseWheel(t *testing.T) {
 	mock := &MockInputDevice{}
 	h := &Handler{Mouse: mock, Keyboard: mock}
