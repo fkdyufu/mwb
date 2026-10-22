@@ -87,3 +87,40 @@ func TestEncryptedStreamMultipleBlocks(t *testing.T) {
 		t.Error("packet 2 mismatch")
 	}
 }
+
+func TestDecryptReaderKeepsPartialBlocks(t *testing.T) {
+	key := DeriveKey("TestSecurityKey!!")
+	iv := FixedIV()
+	plain := make([]byte, 100)
+	for i := range plain {
+		plain[i] = byte(i)
+	}
+	padded := append(append([]byte{}, plain...), make([]byte, 12)...)
+
+	var buf bytes.Buffer
+	enc, err := NewEncryptWriter(&buf, key, iv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := enc.Write(padded); err != nil {
+		t.Fatal(err)
+	}
+
+	dec, err := NewDecryptReader(&buf, key, iv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Read in sizes that do not line up with the 16-byte blocks
+	var got []byte
+	for _, n := range []int{3, 20, 7, 40, 30} {
+		p := make([]byte, n)
+		m, err := io.ReadFull(dec, p)
+		if err != nil {
+			t.Fatalf("read %d: %v", n, err)
+		}
+		got = append(got, p[:m]...)
+	}
+	if !bytes.Equal(got, plain) {
+		t.Errorf("got %v, want %v", got, plain)
+	}
+}

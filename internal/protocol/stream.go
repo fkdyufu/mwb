@@ -56,6 +56,8 @@ func (e *EncryptWriter) Write(p []byte) (int, error) {
 type DecryptReader struct {
 	r    io.Reader
 	mode cipher.BlockMode
+	// pending holds decrypted bytes not yet returned by Read.
+	pending []byte
 }
 
 // NewDecryptReader creates an AES-256-CBC decrypting reader.
@@ -69,23 +71,21 @@ func NewDecryptReader(r io.Reader, key, iv []byte) (*DecryptReader, error) {
 }
 
 // Read reads encrypted data, decrypts it, and returns plaintext.
-// Reads in multiples of 16 bytes.
+// It reads whole 16-byte blocks from the underlying reader, keeping any
+// plaintext that does not fit in p for the next call.
 func (d *DecryptReader) Read(p []byte) (int, error) {
-	n := len(p)
-	if n < aesBlockSize {
-		n = aesBlockSize
+	if len(p) == 0 {
+		return 0, nil
 	}
-	n = (n / aesBlockSize) * aesBlockSize
-
-	ct := make([]byte, n)
-	nn, err := io.ReadFull(d.r, ct)
-	if err != nil {
-		return 0, err
+	if len(d.pending) == 0 {
+		ct := make([]byte, max(len(p)/aesBlockSize, 1)*aesBlockSize)
+		if _, err := io.ReadFull(d.r, ct); err != nil {
+			return 0, err
+		}
+		d.mode.CryptBlocks(ct, ct)
+		d.pending = ct
 	}
-	d.mode.CryptBlocks(ct[:nn], ct[:nn])
-	copy(p, ct[:nn])
-	if nn > len(p) {
-		return len(p), nil
-	}
-	return nn, nil
+	n := copy(p, d.pending)
+	d.pending = d.pending[n:]
+	return n, nil
 }
