@@ -134,6 +134,19 @@ func (h *Handler) handleMouse(pkt *protocol.Packet) {
 		if err = h.Mouse.MoveTo(md.X, md.Y); err == nil {
 			err = h.Mouse.ButtonUp(input.BTN_MIDDLE)
 		}
+	case protocol.WM_XBUTTONDOWN, protocol.WM_XBUTTONUP:
+		btn, ok := xButtons[md.WheelDelta]
+		if !ok {
+			slog.Debug("unhandled X button", "button", md.WheelDelta)
+			return
+		}
+		if err = h.Mouse.MoveTo(md.X, md.Y); err == nil {
+			if md.DwFlags == protocol.WM_XBUTTONDOWN {
+				err = h.Mouse.ButtonDown(btn)
+			} else {
+				err = h.Mouse.ButtonUp(btn)
+			}
+		}
 	case protocol.WM_MOUSEWHEEL:
 		delta := md.WheelDelta / 120
 		if delta == 0 && md.WheelDelta > 0 {
@@ -149,6 +162,13 @@ func (h *Handler) handleMouse(pkt *protocol.Packet) {
 	if err != nil {
 		slog.Error("mouse input error", "err", err)
 	}
+}
+
+// xButtons maps the X buttons MWB sends in WheelDelta with WM_XBUTTONDOWN and
+// WM_XBUTTONUP, the high word of the hook's mouseData, to the side buttons.
+var xButtons = map[int32]uint16{
+	0x0001: input.BTN_SIDE,  // XBUTTON1: back
+	0x0002: input.BTN_EXTRA, // XBUTTON2: forward
 }
 
 // numpadVKs maps the virtual keys Windows reports for number pad keys while

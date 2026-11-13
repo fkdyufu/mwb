@@ -141,7 +141,7 @@ func CreateVirtualMouse(name string) (*VirtualMouse, error) {
 		}
 	}
 
-	for _, btn := range []uintptr{uintptr(BTN_LEFT), uintptr(BTN_RIGHT), uintptr(BTN_MIDDLE)} {
+	for _, btn := range []uintptr{uintptr(BTN_LEFT), uintptr(BTN_RIGHT), uintptr(BTN_MIDDLE), uintptr(BTN_SIDE), uintptr(BTN_EXTRA)} {
 		if err := ioctl(fd, uiSetKeyBit, btn); err != nil {
 			return nil, fmt.Errorf("UI_SET_KEYBIT: %w", err)
 		}
@@ -205,7 +205,7 @@ func (m *VirtualMouse) MoveTo(x, y int32) error {
 	return syncEvents(m.fd)
 }
 
-// ButtonDown presses a mouse button (BTN_LEFT, BTN_RIGHT, or BTN_MIDDLE).
+// ButtonDown presses a mouse button (BTN_LEFT, BTN_RIGHT, BTN_MIDDLE, BTN_SIDE or BTN_EXTRA).
 func (m *VirtualMouse) ButtonDown(button uint16) error {
 	if err := writeEvent(m.fd, evKey, button, 1); err != nil {
 		return err
@@ -213,7 +213,7 @@ func (m *VirtualMouse) ButtonDown(button uint16) error {
 	return syncEvents(m.fd)
 }
 
-// ButtonUp releases a mouse button (BTN_LEFT, BTN_RIGHT, or BTN_MIDDLE).
+// ButtonUp releases a mouse button (BTN_LEFT, BTN_RIGHT, BTN_MIDDLE, BTN_SIDE or BTN_EXTRA).
 func (m *VirtualMouse) ButtonUp(button uint16) error {
 	if err := writeEvent(m.fd, evKey, button, 0); err != nil {
 		return err

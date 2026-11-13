@@ -99,6 +99,14 @@ func (m *VirtualMouse) buttonEvent(button uint16, down bool) error {
 		eventDown = C.kCGEventOtherMouseDown
 		eventUp = C.kCGEventOtherMouseUp
 		cgButton = C.kCGMouseButtonCenter
+	case BTN_SIDE:
+		eventDown = C.kCGEventOtherMouseDown
+		eventUp = C.kCGEventOtherMouseUp
+		cgButton = 3 // back
+	case BTN_EXTRA:
+		eventDown = C.kCGEventOtherMouseDown
+		eventUp = C.kCGEventOtherMouseUp
+		cgButton = 4 // forward
 	default:
 		return fmt.Errorf("unknown button: 0x%X", button)
 	}

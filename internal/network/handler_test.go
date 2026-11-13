@@ -104,6 +104,51 @@ func TestHandleMouseButtons(t *testing.T) {
 	}
 }
 
+func TestHandleMouseXButtons(t *testing.T) {
+	for _, tc := range []struct {
+		xButton int32
+		want    uint16
+	}{
+		{1, input.BTN_SIDE},
+		{2, input.BTN_EXTRA},
+	} {
+		mock := &MockInputDevice{}
+		h := &Handler{Mouse: mock, Keyboard: mock}
+
+		pkt := &protocol.Packet{Type: protocol.Mouse}
+		pkt.Mouse.X = 100
+		pkt.Mouse.Y = 200
+		pkt.Mouse.WheelDelta = tc.xButton
+		pkt.Mouse.DwFlags = protocol.WM_XBUTTONDOWN
+		h.HandlePacket(pkt)
+		if len(mock.ButtonDowns) != 1 || mock.ButtonDowns[0] != tc.want {
+			t.Errorf("XBUTTON%d: expected 0x%X down, got %v", tc.xButton, tc.want, mock.ButtonDowns)
+		}
+
+		pkt.Mouse.DwFlags = protocol.WM_XBUTTONUP
+		h.HandlePacket(pkt)
+		if len(mock.ButtonUps) != 1 || mock.ButtonUps[0] != tc.want {
+			t.Errorf("XBUTTON%d: expected 0x%X up, got %v", tc.xButton, tc.want, mock.ButtonUps)
+		}
+		if len(mock.MouseMoves) != 2 || mock.MouseMoves[0].X != 100 || mock.MouseMoves[0].Y != 200 {
+			t.Errorf("XBUTTON%d: expected moves to (100,200), got %v", tc.xButton, mock.MouseMoves)
+		}
+	}
+}
+
+func TestHandleMouseUnknownXButton(t *testing.T) {
+	mock := &MockInputDevice{}
+	h := &Handler{Mouse: mock, Keyboard: mock}
+
+	pkt := &protocol.Packet{Type: protocol.Mouse}
+	pkt.Mouse.WheelDelta = 3
+	pkt.Mouse.DwFlags = protocol.WM_XBUTTONDOWN
+	h.HandlePacket(pkt)
+	if len(mock.ButtonDowns) != 0 || len(mock.MouseMoves) != 0 {
+		t.Errorf("expected unknown X button to be ignored, got downs %v moves %v", mock.ButtonDowns, mock.MouseMoves)
+	}
+}
+
 func TestHandleKeyboard(t *testing.T) {
 	mock := &MockInputDevice{}
 	h := &Handler{Mouse: mock, Keyboard: mock}
