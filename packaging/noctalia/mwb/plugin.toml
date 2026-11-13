@@ -1,0 +1,36 @@
+# Noctalia plugin for mwb: a bar widget showing whether mwb is stopped,
+# disconnected or connected, and a panel to start, restart and stop it.
+#
+# service -> follows `mwb status -watch`, runs start/restart/stop with systemctl
+# widget  -> status glyph and tooltip, opens the panel
+# panel   -> state details and the start/restart/stop buttons
+#
+# The commands can be bound to keys too:
+#   noctalia msg plugin fkdyufu/mwb:service all start|restart|stop
+
+id = "fkdyufu/mwb"
+name = "Mouse Without Borders"
+version = "0.1.0"
+plugin_api = 24
+author = "fkdyufu"
+license = "MIT"
+icon = "mouse"
+description = "Status and controls for mwb, the Mouse Without Borders client."
+tags = ["mwb", "mouse", "keyboard"]
+
+[[widget]]
+id = "status"
+entry = "widget.luau"
+
+[[panel]]
+id = "panel"
+entry = "panel.luau"
+width = 320
+height = 220
+placement = "attached"
+position = "auto"
+open_near_click = true
+
+[[service]]
+id = "service"
+entry = "service.luau"

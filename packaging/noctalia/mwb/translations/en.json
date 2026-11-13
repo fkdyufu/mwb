@@ -1,0 +1,26 @@
+{
+  "state": {
+    "stopped": "Stopped",
+    "disconnected": "Disconnected",
+    "connected": "Connected",
+    "unknown": "Waiting for the mwb service"
+  },
+  "label": {
+    "state": "State",
+    "host": "Host",
+    "remote": "Remote",
+    "since": "Since",
+    "error": "Error"
+  },
+  "button": {
+    "start": "Start",
+    "restart": "Restart",
+    "stop": "Stop",
+    "edit_config": "Edit the config file (applies after a restart)"
+  },
+  "error": {
+    "command": "systemctl {op} mwb failed",
+    "not_found": "mwb not found, run make install first"
+  },
+  "connecting": "Connecting…"
+}

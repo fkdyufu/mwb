@@ -12,6 +12,10 @@ internal/
                       uinput.go (Linux), coregraphics.go (macOS)
   network/          - TCP connection, handshake, packet receive loop
   protocol/         - Packet types, binary serialization, AES-256-CBC encryption
+  status/           - connection state served as JSON lines on a Unix socket
+                      ($XDG_RUNTIME_DIR/mwb.sock), read by `mwb status [-watch]`
+packaging/noctalia/mwb/ - Noctalia bar widget plugin (Luau) built on
+                      `mwb status -watch`
 docs/plans/         - Implementation plan
 ```
 

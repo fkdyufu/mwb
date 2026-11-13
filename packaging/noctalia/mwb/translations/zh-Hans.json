@@ -1,0 +1,26 @@
+{
+  "state": {
+    "stopped": "未启动",
+    "disconnected": "未连接",
+    "connected": "已连接",
+    "unknown": "等待 mwb 服务"
+  },
+  "label": {
+    "state": "状态",
+    "host": "主机",
+    "remote": "对端",
+    "since": "时间",
+    "error": "错误"
+  },
+  "button": {
+    "start": "启动",
+    "restart": "重启",
+    "stop": "停止",
+    "edit_config": "编辑配置文件(重启后生效)"
+  },
+  "error": {
+    "command": "systemctl {op} mwb 失败",
+    "not_found": "找不到 mwb,请先运行 make install"
+  },
+  "connecting": "正在连接…"
+}

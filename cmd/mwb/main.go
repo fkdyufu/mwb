@@ -16,9 +16,14 @@ import (
 	"github.com/bketelsen/mwb/internal/config"
 	"github.com/bketelsen/mwb/internal/input"
 	"github.com/bketelsen/mwb/internal/network"
+	"github.com/bketelsen/mwb/internal/status"
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "status" {
+		os.Exit(runStatus(os.Args[2:]))
+	}
+
 	configPath := flag.String("config", "", "path to config.toml")
 	debug := flag.Bool("debug", false, "enable debug logging")
 	flag.Parse()
@@ -89,6 +94,14 @@ func main() {
 		}
 	}
 
+	hub := status.NewHub(status.Status{State: status.Disconnected, Host: cfg.Host})
+	if srv, err := status.Listen(status.SocketPath(), hub); err != nil {
+		slog.Warn("status socket disabled", "err", err)
+	} else {
+		defer func() { _ = srv.Close() }()
+		go srv.Serve()
+	}
+
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
@@ -103,23 +116,36 @@ func main() {
 			conn, err := network.Connect(addr, cfg.Key, cfg.Name, 10*time.Second)
 			if err != nil {
 				slog.Error("connection failed", "err", err, "retry_in", backoff)
+				hub.Update(func(s *status.Status) { s.Error = err.Error() })
 				time.Sleep(backoff)
 				backoff = min(backoff*2, maxBackoff)
 				continue
 			}
 
 			slog.Info("connected", "remote", conn.RemoteName)
+			hub.Update(func(s *status.Status) {
+				s.State = status.Connected
+				s.Remote = conn.RemoteName
+				s.Error = ""
+			})
 			backoff = 1 * time.Second
 
 			if clip != nil {
 				clip.SetPeer(conn)
 			}
+			lost := "connection closed"
 			if err := network.ReceiveLoop(conn, handler); err != nil {
 				slog.Error("receive loop error", "err", err)
+				lost = err.Error()
 			}
 			if clip != nil {
 				clip.SetPeer(nil)
 			}
+			hub.Update(func(s *status.Status) {
+				s.State = status.Disconnected
+				s.Remote = ""
+				s.Error = lost
+			})
 
 			_ = conn.Close()
 			slog.Info("disconnected, will reconnect", "in", backoff)

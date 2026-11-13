@@ -152,9 +152,30 @@ launchctl unload ~/Library/LaunchAgents/com.mwb.agent.plist
 mwb                          # uses default config path
 mwb -config /path/to/config  # custom config path
 mwb -debug                   # enable debug logging
+mwb status                   # print the state of the running mwb
+mwb status -watch            # print the state again on each change
 ```
 
 On the Windows side, open PowerToys Mouse Without Borders and click "Refresh connections" to discover the Linux client. Then drag it into your desired position in the device layout.
+
+### Status
+
+`mwb status` prints the state of the running mwb as a JSON line, read from the socket it serves in `$XDG_RUNTIME_DIR/mwb.sock`. With `-watch`, it prints a line again on each change, and keeps running across mwb restarts:
+
+```json
+{"v":1,"state":"connected","host":"192.168.1.100","remote":"DESKTOP-PC","since":1761230000}
+```
+
+`state` is `stopped` (mwb is not running), `disconnected` (connecting, or waiting to retry after `error`) or `connected` (to the `remote` machine). `since` is when the state last changed, in Unix seconds.
+
+### Noctalia widget
+
+`packaging/noctalia/mwb` is a [Noctalia](https://noctalia.dev) 5 plugin that shows this state in the bar, with a panel to start, restart and stop the mwb service and edit its config. Link it into Noctalia's plugin directory and enable it, then add the "Mouse Without Borders" widget to a bar in Noctalia's settings:
+
+```bash
+ln -s "$PWD/packaging/noctalia/mwb" ~/.local/share/noctalia/plugins/mwb
+noctalia msg plugins enable fkdyufu/mwb
+```
 
 ## How It Works
 
